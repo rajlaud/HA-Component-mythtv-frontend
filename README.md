@@ -54,6 +54,7 @@ media_player:
     name: Friendly frontend name (optional, default: MythTV Frontend)
     mac: MAC address for WOL (optional)
     show_artwork: Choose whether or not to show artwork (optional, default: True)
+    power_switch_entity_id: A switch entity to control power on/off (optional, default "none")
     turn_off_sysevent: mythfrontend sysevent to shutdown (optional, default: "none")
     timeout: number of seconds to use as timeout in API send (optional, default: 1.0) 
 ```

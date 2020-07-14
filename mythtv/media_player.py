@@ -43,6 +43,8 @@ from homeassistant.util import dt as dt_util
 
 from .const import DOMAIN, MYTHTV_ID
 
+POWER_SWITCH_ENTITY_ID = "power_switch_entity_id"
+
 # Prerequisite (to be converted to standard PyPI library when available)
 # https://github.com/billmeek/MythTVServicesAPI
 
@@ -94,10 +96,9 @@ FRONTEND_SCHEMA = {
     vol.Optional(CONF_MAC): cv.string,
     vol.Optional(MYTHTV_ID): cv.string,
     vol.Optional("show_artwork", default=DEFAULT_ARTWORK_CHOICE): cv.boolean,
-    vol.Optional(
-        CONF_TURN_OFF_SYSEVENT, default=DEFAULT_TURN_OFF_SYSEVENT
-    ): cv.string,
+    vol.Optional(CONF_TURN_OFF_SYSEVENT, default=DEFAULT_TURN_OFF_SYSEVENT): cv.string,
     vol.Optional(CONF_TIMEOUT, default=DEFAULT_TIMEOUT): vol.Coerce(float),
+    vol.Optional(POWER_SWITCH_ENTITY_ID): cv.entity_id,
 }
 
 # Set up YAML schema
@@ -113,6 +114,7 @@ def setup_platform(hass, conf, add_entities, discovery_info=None):
         _LOGGER.debug("Reached setup_platform with discovery_info: %s", discovery_info)
         config = DISCOVERY_SCHEMA(discovery_info)
     else:
+        _LOGGER.debug("Setting up platform with config: %s", conf)
         config = conf
 
     host_frontend = config.get(CONF_HOST)
@@ -127,6 +129,7 @@ def setup_platform(hass, conf, add_entities, discovery_info=None):
     else:
         turn_off = "none"
     mythtv_id = config.get(MYTHTV_ID)
+    power_switch_entity = config.get(POWER_SWITCH_ENTITY_ID)
 
     frontend = MythTVFrontendEntity(
         host_frontend,
@@ -138,6 +141,7 @@ def setup_platform(hass, conf, add_entities, discovery_info=None):
         turn_off,
         timeout,
         mythtv_id,
+        power_switch_entity,
     )
     add_entities([frontend], True)  # update entity immediately to set unique_id
     mythtv.add_frontend(frontend)
@@ -161,6 +165,7 @@ class MythTVFrontendEntity(MediaPlayerEntity):
         turn_off,
         timeout,
         mythtv_id,
+        power_switch_entity_id,
     ):
         """Initialize the MythTV API."""
 
@@ -182,10 +187,13 @@ class MythTVFrontendEntity(MediaPlayerEntity):
         self._timeout = timeout
         self._connected = True
         self._unique_id = mythtv_id
+        self._power_switch_entity_id = power_switch_entity_id
 
     def update(self):
         """Use the API to get the latest status."""
-        _LOGGER.debug("MythTVFrontendEntity.api_update() for frontend %s", self.unique_id)
+        _LOGGER.debug(
+            "MythTVFrontendEntity.api_update() for frontend %s", self.unique_id
+        )
         if self._connected:  # only update connected frontends
             try:
                 result = self._fe.send(
@@ -279,6 +287,11 @@ class MythTVFrontendEntity(MediaPlayerEntity):
     @property
     def state(self):
         """Return the state of the entity."""
+        if self._power_switch_entity_id and self._state in [STATE_ON, STATE_OFF, STATE_IDLE]:
+            # override these states with those of the underlying switch
+            power_switch_state = self.hass.states.get(self._power_switch_entity_id)
+            if power_switch_state:
+                return power_switch_state.state
         return self._state
 
     @property
@@ -324,8 +337,8 @@ class MythTVFrontendEntity(MediaPlayerEntity):
     def supported_features(self):
         """Get supported features."""
         features = SUPPORT_MYTHTV_FRONTEND
-        if self._mac:
-            # Add WOL feature
+        if self._mac or self._power_switch_entity_id:
+            # Add power on
             features |= SUPPORT_TURN_ON
         if self._volume["control"]:
             features |= SUPPORT_VOLUME_CONTROL
@@ -424,6 +437,11 @@ class MythTVFrontendEntity(MediaPlayerEntity):
         """Turn the media player on."""
         if self._mac:
             self._wol.send_magic_packet(self._mac)
+        if self._power_switch_entity_id:
+            _LOGGER.debug("Turning on switch: %s", self._power_switch_entity_id)
+            self.hass.services.call(
+                "switch", "turn_on", {"entity_id": self._power_switch_entity_id}
+            )
 
     def media_seek(self, position):
         """Send seek command."""
@@ -437,6 +455,11 @@ class MythTVFrontendEntity(MediaPlayerEntity):
             # Tell HA the state is unknown to prevent further inputs
             # and errors on unresponsive frontends
             self._state = STATE_UNKNOWN
+        if self._power_switch_entity_id:
+            _LOGGER.debug("Turning off switch: %s", self._power_switch_entity_id)
+            self.hass.services.call(
+                "switch", "turn_off", {"entity_id": self._power_switch_entity_id}
+            )
 
     def media_stop(self):
         """Stop playback of media"""
